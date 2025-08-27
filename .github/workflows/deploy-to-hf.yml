@@ -12,7 +12,7 @@ jobs:
 
       - name: Sync to HF Space
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN_FOR_GITHUB }}
         run: |
           git clone https://huggingface.co/spaces/jcmtomorandd/langflow-dk hfrepo
           rsync -av --delete langflow-space/ hfrepo/
