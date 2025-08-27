@@ -9,4 +9,5 @@ ENV LANGFLOW_CACHE_DIR=/data/.cache/langflow
 RUN mkdir -p /data/.cache/langflow && chmod -R 777 /data
 
 CMD bash -lc "langflow run --host 0.0.0.0 --port ${PORT}"
-# build-bump: 2025-08-27T01:30Z
+# build-bump: 2025-08-27T01:43Z
+
