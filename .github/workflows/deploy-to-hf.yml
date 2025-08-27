@@ -29,20 +29,22 @@ jobs:
           # 1) HF Space を clone
           git clone https://huggingface.co/spaces/${HF_SPACE} hfrepo
 
-          # 2) Git 管理ディレクトリを保護しつつ同期
-          rsync -av --delete \
-            --exclude '.git' --exclude '.git/**' \
-            langflow-space/ hfrepo/
+          # 2) Git 管理フォルダを保護しつつ同期
+          rsync -av --delete --exclude '.git' --exclude '.git/**' langflow-space/ hfrepo/
 
-          # 3) hfrepo 内でコミット〜push
-          pushd hfrepo
+          # 3) hfrepo でコミット
+          cd hfrepo
           git config user.email "${GIT_AUTHOR_EMAIL}"
           git config user.name "${GIT_AUTHOR_NAME}"
           git add -A
           git commit -m "Sync from GitHub" || echo "No changes to commit"
 
-          # 認証付きリモートURLに切替 → 取り込み → push
+          # <確認ポイント> HF に置く Dockerfile の先頭を出力
+          echo "----- HFrepo Dockerfile (head) -----"
+          head -n 80 Dockerfile || true
+          echo "-------------------------------------"
+
+          # 4) 認証 URL に切替 → 取り込み → 強制 push
           git remote set-url origin https://${GITHUB_ACTOR}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}.git
           git pull --rebase origin main || true
-          git push origin HEAD:main
-          popd
+          git push -f origin HEAD:main
