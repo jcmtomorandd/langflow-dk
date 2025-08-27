@@ -17,7 +17,7 @@ echo "[cfg] AUTO_LOGIN=True"
 echo "[boot] waiting health..."
 
 # Langflow起動（バックグラウンド）
-langflow run --host 0.0.0.0 --port $PORT_INTERNAL --auto-login &
+langflow run --host 0.0.0.0 --port $PORT_INTERNAL &
 
 # 起動待ち
 sleep 15
