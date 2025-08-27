@@ -40,16 +40,14 @@ import os
 with open('/data/flows/TestBot_GitHub.json', 'r') as f:
     flow_data = json.load(f)
 
-# Langflow APIにPOST
+# Langflow APIにPOST（正しいエンドポイント）
 try:
-    url = 'http://localhost:$PORT_INTERNAL/api/v1/flows/upload'
+    url = 'http://localhost:$PORT_INTERNAL/api/v1/flows/'
+    headers = {'Content-Type': 'application/json'}
     
-    # multipart/form-data形式でアップロード
-    files = {'file': ('TestBot_GitHub.json', json.dumps(flow_data), 'application/json')}
+    response = requests.post(url, json=flow_data, headers=headers, timeout=30)
     
-    response = requests.post(url, files=files, timeout=30)
-    
-    if response.status_code == 200:
+    if response.status_code in [200, 201]:
         print('[import] SUCCESS: Flow imported')
     else:
         print(f'[import] ERROR: {response.status_code} - {response.text}')
