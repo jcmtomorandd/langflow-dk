@@ -1,24 +1,45 @@
 name: Deploy to HF Space
+
 on:
   push:
     branches: [ main ]
     paths:
       - 'langflow-space/**'
+  workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rsync (just in case)
+        run: sudo apt-get update && sudo apt-get install -y rsync
 
       - name: Sync to HF Space
         env:
+          HF_SPACE: jcmtomorandd/langflow-dk
           HF_TOKEN: ${{ secrets.HF_TOKEN_FOR_GITHUB }}
+          GIT_AUTHOR_NAME: GitHub Actions
+          GIT_AUTHOR_EMAIL: actions@users.noreply.github.com
         run: |
-          git clone https://huggingface.co/spaces/jcmtomorandd/langflow-dk hfrepo
+          set -eux
+          # 1) HF Space を clone（読み取りは匿名可）
+          git clone https://huggingface.co/spaces/${HF_SPACE} hfrepo
+
+          # 2) GitHub 側の langflow-space/ を HF リポへ反映
           rsync -av --delete langflow-space/ hfrepo/
+
+          # 3) コミット準備
           cd hfrepo
-          git config user.email "actions@users.noreply.github.com"
-          git config user.name "GitHub Actions"
+          git config user.email "${GIT_AUTHOR_EMAIL}"
+          git config user.name "${GIT_AUTHOR_NAME}"
           git add -A
-          git commit -m "Sync from GitHub" || echo "No changes"
-          git push https://${GITHUB_ACTOR}:${HF_TOKEN}@huggingface.co/spaces/jcmtomorandd/langflow-dk.git
+          git commit -m "Sync from GitHub" || echo "No changes to commit"
+
+          # 4) 認証付き URL に切替えて、先に取り込み → その後 push
+          git remote set-url origin https://${GITHUB_ACTOR}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}.git
+          git pull --rebase origin main || true
+          git push origin HEAD:main
