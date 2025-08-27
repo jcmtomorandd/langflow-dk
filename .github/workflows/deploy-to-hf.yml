@@ -1,0 +1,24 @@
+name: Deploy to HF Space
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'langflow-space/**'
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://huggingface.co/spaces/jcmtomorandd/langflow-dk hfrepo
+          rsync -av --delete langflow-space/ hfrepo/
+          cd hfrepo
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "GitHub Actions"
+          git add -A
+          git commit -m "Sync from GitHub" || echo "No changes"
+          git push https://${GITHUB_ACTOR}:${HF_TOKEN}@huggingface.co/spaces/jcmtomorandd/langflow-dk.git
