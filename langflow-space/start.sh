@@ -10,6 +10,8 @@ mkdir -p "$LOG_DIR"
 echo "[boot] PORT_INTERNAL=$PORT_INTERNAL"
 ls -la "$FLOWS_DIR" || true
 
+echo "[cfg] AUTO_LOGIN=${LANGFLOW_AUTO_LOGIN:-<unset>}"
+
 # Langflow 起動（APIのみ）
 langflow run --backend-only --host 0.0.0.0 --port "${PORT_INTERNAL}" --log-file "${LOG_DIR}/langflow.log" &
 LF_PID=$!
