@@ -13,7 +13,7 @@ echo "[boot] listing ${FLOWS_DIR}:"
 ls -la "${FLOWS_DIR}" || true
 
 # Langflow 起動（バックグラウンドで）
-langflow run --host 0.0.0.0 --port "${PORT_INTERNAL}" --log-file "${LOG_DIR}/langflow.log" &
+langflow run --backend-only --host 0.0.0.0 --port "${PORT_INTERNAL}" --log-file "${LOG_DIR}/langflow.log" &
 LF_PID=$!
 
 # Langflow が立ち上がるのを待つ（最大 120 秒）
