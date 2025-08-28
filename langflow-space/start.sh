@@ -8,9 +8,8 @@ export LANGFLOW_HOST=0.0.0.0
 export LANGFLOW_PORT=$PORT_INTERNAL
 export LANGFLOW_AUTO_LOGIN=true
 
-# ★★★ ここに追加 ★★★
-# HF Spacesの環境変数制限に対応したマッピング
-export "Cohere API Key"=$COHERE_API_KEY
+# 環境変数自動フォールバック機能を有効化
+export LANGFLOW_FALLBACK_FROM_ENV_VAR=true
 
 echo "[boot] PORT_INTERNAL=$PORT_INTERNAL"
 
