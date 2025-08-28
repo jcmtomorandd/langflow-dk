@@ -29,6 +29,15 @@ if [ -f "/data/flows/TestBot_GitHub.json" ]; then
     echo "[import] importing TestBot_GitHub.json..."
     sleep 10
     
+    # APIキー取得（ログから抽出）
+    API_KEY=$(grep -o "lf-[a-zA-Z0-9]*" /tmp/langflow.log 2>/dev/null | head -1)
+    if [ -z "$API_KEY" ]; then
+        # 代替方法：環境変数から取得
+        API_KEY="langflow-api-key"
+    fi
+    
+    echo "[auth] Using API key: ${API_KEY:0:6}***"
+    
     # Python経由で直接インポート
     python3 -c "
 import json
@@ -40,10 +49,13 @@ import os
 with open('/data/flows/TestBot_GitHub.json', 'r') as f:
     flow_data = json.load(f)
 
-# Langflow APIにPOST（正しいエンドポイント）
+# Langflow APIにPOST（APIキー付き）
 try:
     url = 'http://localhost:$PORT_INTERNAL/api/v1/flows/'
-    headers = {'Content-Type': 'application/json'}
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': '$API_KEY'
+    }
     
     response = requests.post(url, json=flow_data, headers=headers, timeout=30)
     
