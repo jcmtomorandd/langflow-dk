@@ -580,7 +580,7 @@
             "frozen": false,
             "icon": "file-text",
             "key": "File",
-            "last_updated": "2025-08-27T05:03:51.269Z",
+            "last_updated": "2025-08-28T01:57:08.241Z",
             "legacy": false,
             "lf_version": "1.5.0.post1",
             "metadata": {},
@@ -1757,7 +1757,7 @@
             "frozen": false,
             "icon": "Cohere",
             "key": "CohereEmbeddings",
-            "last_updated": "2025-08-27T05:03:51.270Z",
+            "last_updated": "2025-08-28T01:57:08.242Z",
             "legacy": false,
             "lf_version": "1.5.0.post1",
             "metadata": {
@@ -1808,7 +1808,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "str",
-                "value": ""
+                "value": "Cohere API Key"
               },
               "code": {
                 "advanced": true,
@@ -2410,7 +2410,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "str",
-                "value": ""
+                "value": "Cohere API Key"
               },
               "input_value": {
                 "_input_type": "MessageInput",
@@ -2780,9 +2780,9 @@
       }
     ],
     "viewport": {
-      "x": 208.08975634731178,
-      "y": 498.9988284361309,
-      "zoom": 0.44950201783858307
+      "x": 248.12660824912282,
+      "y": 493.1942363724662,
+      "zoom": 0.30069606299760404
     }
   },
   "description": "長文管理完了：ユーザーのY/Nで判断\n多言語管理\n⇒ 8/12 多言語（日英）認識OK\n　 Cohere EnbeddingsのModelを\n     embed-multilingual-v3.0に変更\n　 FIASSのPersist Directryを./faiss_db_refreshに変更",
