@@ -11,6 +11,9 @@ export LANGFLOW_AUTO_LOGIN=true
 # 環境変数自動フォールバック機能を有効化
 export LANGFLOW_FALLBACK_FROM_ENV_VAR=true
 
+# .envファイルを動的に作成
+echo "COHERE_API_KEY=$COHERE_API_KEY" > .env
+
 echo "[boot] PORT_INTERNAL=$PORT_INTERNAL"
 
 # flowsディレクトリ確認
@@ -19,8 +22,8 @@ echo "[cfg] AUTO_LOGIN=True"
 
 echo "[boot] waiting health..."
 
-# Langflow起動（バックグラウンド）
-langflow run --host 0.0.0.0 --port $PORT_INTERNAL &
+# Langflow起動（バックグラウンド）- .envファイルを読み込み
+langflow run --host 0.0.0.0 --port $PORT_INTERNAL --env-file .env &
 
 # 起動待ち
 sleep 15
