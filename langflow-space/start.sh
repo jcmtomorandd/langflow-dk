@@ -1,81 +1,76 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 echo "===== Application Startup at $(date) ====="
 
-# 環境変数設定
-export PORT_INTERNAL=${PORT:-7860}
-export LANGFLOW_HOST=0.0.0.0
-export LANGFLOW_PORT=$PORT_INTERNAL
-export LANGFLOW_AUTO_LOGIN=true
+# ---- 既存の HF Secrets/Variables のみ利用 ----
+# COHERE_API_KEY → Global Variable として適用（緑リンク）
+# LANGFLOW_APPLICATION_TOKEN → 認証
+# LANGFLOW_AUTO_LOGIN → true
 
-# 環境変数自動フォールバック機能を有効化
-export LANGFLOW_FALLBACK_FROM_ENV_VAR=true
+export LANGFLOW_STORE_ENVIRONMENT_VARIABLES=true
+export LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=COHERE_API_KEY
+export LANGFLOW_REMOVE_API_KEYS=true
 
-# .envファイルを動的に作成
-echo "COHERE_API_KEY=$COHERE_API_KEY" > .env
+SCRIPT_DIR="$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 ; pwd -P)"
 
-echo "[boot] PORT_INTERNAL=$PORT_INTERNAL"
+# ---- 永続ディレクトリ ----
+export XDG_CACHE_HOME=/data/.cache
+mkdir -p /data/flows/_patched /data/kb /data/logs
 
-# flowsディレクトリ確認
-ls -la /data/flows/
-echo "[cfg] AUTO_LOGIN=True"
-
-echo "[boot] waiting health..."
-
-# Langflow起動（バックグラウンド）- .envファイルを読み込み
-langflow run --host 0.0.0.0 --port $PORT_INTERNAL --env-file .env &
-
-# 起動待ち
-sleep 15
-
-echo "[boot] healthy."
-
-# フロー自動インポート（修正版）
-if [ -f "/data/flows/TestBot_GitHub.json" ]; then
-    echo "[import] importing TestBot_GitHub.json..."
-    sleep 10
-    
-    # APIキー取得（ログから抽出）
-    API_KEY=$(grep -o "lf-[a-zA-Z0-9]*" /tmp/langflow.log 2>/dev/null | head -1)
-    if [ -z "$API_KEY" ]; then
-        # 代替方法：環境変数から取得
-        API_KEY="langflow-api-key"
-    fi
-    
-    echo "[auth] Using API key: ${API_KEY:0:6}***"
-    
-    # Python経由で直接インポート
-    python3 -c "
-import json
-import requests
-import time
-import os
-
-# ファイル読み込み
-with open('/data/flows/TestBot_GitHub.json', 'r') as f:
-    flow_data = json.load(f)
-
-# Langflow APIにPOST（APIキー付き）
-try:
-    url = 'http://localhost:$PORT_INTERNAL/api/v1/flows/'
-    headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': '$API_KEY'
-    }
-    
-    response = requests.post(url, json=flow_data, headers=headers, timeout=30)
-    
-    if response.status_code in [200, 201]:
-        print('[import] SUCCESS: Flow imported')
-    else:
-        print(f'[import] ERROR: {response.status_code} - {response.text}')
-        
-except Exception as e:
-    print(f'[import] EXCEPTION: {e}')
-"
-else
-    echo "[import] No flow files found"
+# ---- kb を /data/kb へ同期（langflow-space/kb 優先）----
+if [ -d "$SCRIPT_DIR/kb" ]; then
+  cp -a "$SCRIPT_DIR/kb/." /data/kb/ || true
+elif [ -d "$ROOT_DIR/kb" ]; then
+  cp -a "$ROOT_DIR/kb/." /data/kb/ || true
 fi
 
-# フォアグラウンドでプロセス維持
-wait
+# ---- フローJSONをサニタイズ＆FILEパス補正 ----
+python3 - <<'PY'
+import json, os, glob, pathlib, sys
+KB="/data/kb"; OUT="/data/flows/_patched"; os.makedirs(OUT, exist_ok=True)
+cands=[os.path.join(os.path.dirname(__file__),"flows"),
+       os.path.join(os.path.dirname(os.path.dirname(__file__)),"flows")]
+
+def rewrite_path(v):
+    if isinstance(v,str):
+        bn=os.path.basename(v.replace("\\","/"))
+        return os.path.join(KB,bn) if bn else v
+    if isinstance(v,list): return [rewrite_path(i) for i in v]
+    return v
+
+def walk(x):
+    if isinstance(x,dict):
+        y={}
+        for k,v in x.items():
+            kl=k.lower()
+            # JSON 内のAPIキーは削除（→ 環境変数で供給）
+            if kl in {"api_key","cohere_api_key","openai_api_key","huggingfacehub_api_token"}:
+                continue
+            if kl in {"file_path","file_paths","path","paths"}:
+                v=rewrite_path(v)
+            y[k]=walk(v)
+        return y
+    if isinstance(x,list): return [walk(i) for i in x]
+    return x
+
+found=False
+for base in cands:
+    for src in glob.glob(os.path.join(base,"*.json")):
+        found=True
+        with open(src,"r",encoding="utf-8") as f: data=json.load(f)
+        data=walk(data)
+        dst=os.path.join(OUT, pathlib.Path(src).name)
+        with open(dst,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False,indent=2)
+if not found:
+    print("No flow JSON found.", file=sys.stderr)
+else:
+    print("Patched flows ready.")
+PY
+
+# ---- フロー置換インポート ----
+langflow import /data/flows/_patched --yes
+
+# ---- Langflow 起動（UIありデモ用）----
+exec langflow run --host 0.0.0.0 --port ${PORT:-7860}
