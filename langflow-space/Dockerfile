@@ -17,6 +17,9 @@ WORKDIR /data
 # flows 配置
 COPY flows /data/flows
 
+# kb 配置 ← ここを追加
+COPY kb /kb
+
 # 起動スクリプト
 COPY start.sh /start.sh
 RUN sed -i 's/\r$//' /start.sh && chmod +x /start.sh
