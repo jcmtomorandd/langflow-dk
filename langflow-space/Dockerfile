@@ -18,7 +18,7 @@ WORKDIR /data
 COPY flows /data/flows
 
 # kb 配置 ← ここを追加
-COPY kb /kb
+COPY kb/ /data/kb/
 
 # 起動スクリプト
 COPY start.sh /start.sh
