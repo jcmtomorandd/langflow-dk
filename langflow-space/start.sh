@@ -17,6 +17,39 @@ PORT_INTERNAL="${PORT:-7860}"
 export XDG_CACHE_HOME=/data/.cache
 mkdir -p /data/flows/_patched /data/kb /data/logs
 
+# ---- 検証: Fileノードの参照ファイルを確認 ----
+python3 - <<'PY'
+import json, glob, os
+print("[verify] scanning patched flows for File node paths...")
+def iter_paths(d):
+    for k,v in d.items():
+        if k.lower() in {"file_path","path"} and isinstance(v,str):
+            yield v
+        elif k.lower() in {"file_paths","paths"} and isinstance(v,list):
+            for x in v:
+                if isinstance(x,str): yield x
+        elif isinstance(v,dict):
+            yield from iter_paths(v)
+        elif isinstance(v,list):
+            for i in v:
+                if isinstance(i,dict): yield from iter_paths(i)
+
+ok=ng=0
+for f in glob.glob("/data/flows/_patched/*.json"):
+    with open(f,"r",encoding="utf-8") as fp: data=json.load(fp)
+    paths=list(iter_paths(data))
+    print(f"[verify] {os.path.basename(f)} : {len(paths)} path(s)")
+    for p in paths:
+        if os.path.exists(p):
+            print(f"  [OK] {p} ({os.path.getsize(p)} bytes)")
+            ok+=1
+        else:
+            print(f"  [NG] {p} (not found)")
+            ng+=1
+print(f"[verify] summary: OK={ok}, NG={ng}")
+PY
+
+
 # ---- kb を /data/kb に同期（サブフォルダごと）----
 if [ -d "$SCRIPT_DIR/kb" ]; then
   cp -a "$SCRIPT_DIR/kb/." /data/kb/ || true
