@@ -154,34 +154,52 @@ for base in cands:
 print("Patched flows ready (force File->/data/kb, empty refs removed)." if found else "No flow JSON found.")
 PY
 
-# ---- 追加補正: ハンドルの baseClasses 欠落を自動補完（_types を流用）----
+# ---- 追加補正: baseClasses を強化補完（空/NULL/型違いも補填・dataTypeで推定）----
 python3 - <<'PY'
 import json, glob, os
 
-def fix_handles(x):
-    if isinstance(x, dict):
-        # _types があり baseClasses が無い場合はコピーして埋める
-        if "_types" in x and "baseClasses" not in x and isinstance(x["_types"], list):
-            x["baseClasses"] = list(x["_types"])
-        # dataType が Embeddings 系で baseClasses 無しなら ["Embeddings"] を強制
-        if "dataType" in x and "baseClasses" not in x:
-            dt = str(x["dataType"]).lower()
-            if "embedding" in dt:
-                x["baseClasses"] = ["Embeddings"]
-        for k,v in list(x.items()):
-            x[k] = fix_handles(v)
-        return x
-    if isinstance(x, list):
-        return [fix_handles(i) for i in x]
-    return x
+# dataType による既定マップ（不足分は自由に追加可能）
+DT_DEFAULTS = {
+    "cohereembeddings": ["Embeddings"],
+    "openaiembeddings": ["Embeddings"],
+    "embed": ["Embeddings"],
+    "splittext": ["TextSplitter"],
+    "textsplitter": ["TextSplitter"],
+    "file": ["Document"],
+    "document": ["Document"],
+    "vectorstore": ["VectorStore"],
+}
+
+def ensure_baseclasses(d):
+    if isinstance(d, dict):
+        # baseClasses が欠落 or 空 or list 以外 → 補完
+        need_fill = ("baseClasses" not in d) or (not d.get("baseClasses")) or (not isinstance(d.get("baseClasses"), list))
+        if need_fill:
+            # 1) _types があればそれをコピー
+            if isinstance(d.get("_types"), list) and d["_types"]:
+                d["baseClasses"] = list(d["_types"])
+            else:
+                # 2) dataType から推定
+                dt = str(d.get("dataType","")).lower()
+                for key, val in DT_DEFAULTS.items():
+                    if key in dt:
+                        d["baseClasses"] = list(val)
+                        break
+        # 再帰
+        for k, v in list(d.items()):
+            d[k] = ensure_baseclasses(v)
+        return d
+    if isinstance(d, list):
+        return [ensure_baseclasses(x) for x in d]
+    return d
 
 for jf in glob.glob("/data/flows/_patched/*.json"):
     with open(jf, "r", encoding="utf-8") as f:
-        d = json.load(f)
-    d = fix_handles(d)
+        obj = json.load(f)
+    obj = ensure_baseclasses(obj)
     with open(jf, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-print("Patched flows: baseClasses added where missing.")
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+print("Patched flows: baseClasses normalized (with dataType fallbacks).")
 PY
 
 # ---- verify: 補正済みJSONをスキャンして実体確認（空は無視）----
