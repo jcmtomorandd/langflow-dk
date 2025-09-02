@@ -17,8 +17,7 @@ PORT_INTERNAL="${PORT:-7860}"
 export XDG_CACHE_HOME=/data/.cache
 mkdir -p /data/flows/_patched /data/kb /data/logs
 
-# ---- kb の配置（優先順位: /data/kb → /kb → リポジトリ内の kb）----
-# 1) Dockerfile で COPY kb/ /data/kb/ している想定。無ければ /kb やリポジトリから補完。
+# ---- kb の配置（優先: /data/kb → /kb → リポジトリ内の kb）----
 if [ -d "/kb" ] && [ -z "$(find /data/kb -type f -print -quit 2>/dev/null)" ]; then
   cp -a /kb/. /data/kb/ || true
 fi
@@ -28,20 +27,20 @@ elif [ -d "$ROOT_DIR/kb" ] && [ -z "$(find /data/kb -type f -print -quit 2>/dev/
   cp -a "$ROOT_DIR/kb/." /data/kb/ || true
 fi
 
-# ---- /data/kb と /kb をログ表示（存在確認）----
+# ---- /data/kb と /kb をログ表示 ----
 echo "[kb] list(/data/kb):"
 find /data/kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 echo "[kb] list(/kb):"
 find /kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 
-# ---- フローJSONを補正（Fileノードを必ず /data/kb/** にバインド）----
+# ---- フローJSONを補正（Fileノードを必ず /data/kb/** に。空参照は除去）----
 python3 - <<'PY'
 import json, os, glob, pathlib
 
 KB="/data/kb"; OUT="/data/flows/_patched"; os.makedirs(OUT, exist_ok=True)
 ALLOWED={".pdf",".txt",".md",".csv",".docx",".json",".yaml",".yml",".xlsx"}
 
-# /data/kb の実ファイル一覧（再帰）とインデックス
+# /data/kb の実ファイル一覧とインデックス
 kb_files=[]
 for r,_,fs in os.walk(KB):
     for fn in fs:
@@ -53,19 +52,23 @@ for p in kb_files:
     kb_index.setdefault(os.path.basename(p).lower(), []).append(p)
 
 def resolve_by_basename(s: str):
-    if not isinstance(s,str): return s
+    if not isinstance(s,str): return None
+    s=s.strip()
+    if not s: return None
     s=s.replace("\\","/")
-    if s.startswith(KB+"/"): return s
+    if s.startswith(KB+"/"): 
+        return s if os.path.exists(s) else None
     base=os.path.basename(s)
     cand=kb_index.get(base.lower())
-    return cand[0] if cand else s
+    return cand[0] if cand and os.path.exists(cand[0]) else None
 
 def force_file_node_bind(obj):
     """
-    Fileノードを検出して、必ず /data/kb/** を参照させる。
-    - path/paths/file_path/file_paths を basename から実在パスへ解決
-    - 参照が無ければ /data/kb 内の先頭数件を自動で files/paths に投入
-    - UI 用 'files' も [{name,path}] で埋める
+    Fileノードを検出して /data/kb/** を参照させる。
+    - 空文字や None は除外
+    - 既存参照→basename解決→存在しないものは捨てる
+    - 何も残らなければ kb_files の先頭数件で埋める
+    - UI 用 'files' も [{name,path}] で生成
     """
     if isinstance(obj, dict):
         for k,v in list(obj.items()):
@@ -78,17 +81,22 @@ def force_file_node_bind(obj):
         is_file_node = (typ.lower()=="file") or ("file" in disp.lower())
 
         if is_file_node:
-            # 既存参照の収集
+            # 既存参照の収集（空は除外）
             paths=[]
             for key in ["file_paths","paths","file_path","path"]:
                 if key in lower:
                     val=obj[lower[key]]
-                    if isinstance(val,str): paths.append(val)
-                    elif isinstance(val,list): paths += [x for x in val if isinstance(x,str)]
+                    if isinstance(val,str):
+                        if val.strip(): paths.append(val.strip())
+                    elif isinstance(val,list):
+                        paths += [x.strip() for x in val if isinstance(x,str) and x.strip()]
 
-            # basename→/data/kb に解決
-            mapped=[resolve_by_basename(p) for p in paths]
-            mapped=[p for p in mapped if isinstance(p,str) and p]
+            # basename→/data/kb に解決し、実在のみ残す
+            mapped=[]
+            for p in paths:
+                rp=resolve_by_basename(p)
+                if rp and os.path.exists(rp):
+                    mapped.append(rp)
 
             # 何も無ければ kb_files を採用（最大5件）
             if not mapped and kb_files:
@@ -96,11 +104,11 @@ def force_file_node_bind(obj):
 
             if mapped:
                 # 重複排除
-                seen=[]; umap=[]
+                seen=set(); umap=[]
                 for m in mapped:
                     if m not in seen:
-                        seen.append(m); umap.append(m)
-                # path/paths に反映
+                        seen.add(m); umap.append(m)
+                # path/paths に反映（空は書かない）
                 if "paths" in lower:
                     obj[lower["paths"]] = umap
                 elif "file_paths" in lower:
@@ -117,6 +125,11 @@ def force_file_node_bind(obj):
                     obj[lower["files"]] = files_arr
                 elif "files" not in lower:
                     obj["files"] = files_arr
+            else:
+                # それでも無ければ、参照系キーそのものを削除して空参照を除去
+                for key in ["file_paths","paths","file_path","path","files"]:
+                    if key in lower:
+                        obj.pop(lower[key], None)
 
         # APIキー系は削除（環境変数で供給）
         for k in list(obj.keys()):
@@ -138,30 +151,35 @@ for base in cands:
         data=force_file_node_bind(data)
         dst=os.path.join(OUT, pathlib.Path(src).name)
         with open(dst,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False,indent=2)
-print("Patched flows ready (force File->/data/kb)." if found else "No flow JSON found.")
+print("Patched flows ready (force File->/data/kb, empty refs removed)." if found else "No flow JSON found.")
 PY
 
-# ---- verify: 補正済みJSONをスキャンして実体確認 ----
+# ---- verify: 補正済みJSONをスキャンして実体確認（空は無視）----
 python3 - <<'PY'
 import json, glob, os
 print("[verify] scan patched flows ...")
+
 def iter_paths(o):
     if isinstance(o, dict):
         for k,v in o.items():
             kl=k.lower()
             if kl=="files" and isinstance(v,list):
                 for it in v:
-                    if isinstance(it,dict) and isinstance(it.get("path"),str):
-                        yield it["path"]
-            if kl in {"file_path","path"} and isinstance(v,str):
-                yield v
+                    if isinstance(it,dict):
+                        p=it.get("path")
+                        if isinstance(p,str) and p.strip():
+                            yield p.strip()
+            if kl in {"file_path","path"} and isinstance(v,str) and v.strip():
+                yield v.strip()
             elif kl in {"file_paths","paths"} and isinstance(v,list):
                 for i in v:
-                    if isinstance(i,str): yield i
+                    if isinstance(i,str) and i.strip(): 
+                        yield i.strip()
             else:
                 yield from iter_paths(v)
     elif isinstance(o,list):
-        for i in o: yield from iter_paths(i)
+        for i in o: 
+            yield from iter_paths(i)
 
 ok=ng=0
 for jf in glob.glob("/data/flows/_patched/*.json"):
@@ -169,11 +187,11 @@ for jf in glob.glob("/data/flows/_patched/*.json"):
     paths=list(dict.fromkeys(iter_paths(d)))
     print(f"[verify] {os.path.basename(jf)} : {len(paths)} ref(s)")
     for p in paths:
-        if p and os.path.exists(p):
+        if os.path.exists(p):
             print(f"  [OK] {p} ({os.path.getsize(p)} bytes)")
             ok+=1
         else:
-            print(f"  [NG] {p if p else '(empty)'} (not found)")
+            print(f"  [NG] {p} (not found)")
             ng+=1
 print(f"[verify] summary: OK={ok}, NG={ng}")
 PY
