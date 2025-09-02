@@ -1,9 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "===== Application Startup at $(date) ====="
+
+# ---- Secrets/Variables （既存のものだけ使用）----
+# COHERE_API_KEY / LANGFLOW_APPLICATION_TOKEN / LANGFLOW_AUTO_LOGIN
+export LANGFLOW_STORE_ENVIRONMENT_VARIABLES=true
+export LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=COHERE_API_KEY
+export LANGFLOW_REMOVE_API_KEYS=true
+
+SCRIPT_DIR="$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 ; pwd -P)"
+PORT_INTERNAL="${PORT:-7860}"
+
+# ---- 永続領域 ----
+export XDG_CACHE_HOME=/data/.cache
+mkdir -p /data/flows/_patched /data/kb /data/logs
+
+# ---- kb を /data/kb に同期（サブフォルダごと）----
+if [ -d "$SCRIPT_DIR/kb" ]; then
+  cp -a "$SCRIPT_DIR/kb/." /data/kb/ || true
+elif [ -d "$ROOT_DIR/kb" ]; then
+  cp -a "$ROOT_DIR/kb/." /data/kb/ || true
+fi
+
+# ---- /data/kb 内容をログ ----
+echo "[kb] list:"
+find /data/kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
+
+# ---- フローJSONを最小補正（サブフォルダ保持・UI表示 files 生成）----
 python3 - <<'PY'
 import json, os, glob, pathlib, sys
 KB="/data/kb"; OUT="/data/flows/_patched"; os.makedirs(OUT, exist_ok=True)
 ALLOWED={".pdf",".txt",".md",".csv",".docx",".json",".yaml",".yml",".xlsx"}
 
-# /data/kb を再帰走査して {basename:[フルパス,..]} を作成（同名が複数でも保持）
+# /data/kb を再帰走査して {basename:[フルパス,..]} を作成
 kb_index={}
 for root, _, files in os.walk(KB):
     for fn in files:
@@ -11,76 +42,112 @@ for root, _, files in os.walk(KB):
         kb_index.setdefault(fn.lower(), []).append(full)
 
 def resolve_to_kb_path(p:str)->str:
-    """与えられたパス/ファイル名を /data/kb 配下の実在フルパスへ解決。相対/絶対/ファイル名だけにも対応。"""
-    p = str(p).replace("\\","/")
-    # すでに /data/kb から始まるならそのまま
+    p=str(p).replace("\\","/")
     if p.startswith(KB + "/") or p==KB:
         return p
-    # リポジトリ側のパス（langflow-space/kb/... 等）が残っていたら、末尾名で解決
-    base = os.path.basename(p)
+    base=os.path.basename(p)
     if base.lower() in kb_index:
-        # 同名が複数あっても先頭を選択（決め打ち）。必要なら後で明示指定可。
         return kb_index[base.lower()][0]
-    # 最後の手段：/data/kb 直下に置いたとみなす
     return os.path.join(KB, base)
 
 def rewrite_paths(v):
-    if isinstance(v, str):
-        return resolve_to_kb_path(v)
-    if isinstance(v, list):
-        return [rewrite_paths(i) for i in v]
+    if isinstance(v,str): return resolve_to_kb_path(v)
+    if isinstance(v,list): return [rewrite_paths(i) for i in v]
     return v
 
 def make_files_list(paths):
-    """UIの File カードに出す 'files': [{'name','path'},…] を作成（存在確認＆拡張子チェックあり）。"""
     items=[]
-    cand = [paths] if isinstance(paths, str) else (paths if isinstance(paths, list) else [])
+    cand=[paths] if isinstance(paths,str) else (paths if isinstance(paths,list) else [])
     for c in cand:
-        p = resolve_to_kb_path(c)
-        ext = os.path.splitext(p)[1].lower()
+        p=resolve_to_kb_path(c)
+        ext=os.path.splitext(p)[1].lower()
         if os.path.exists(p) and (not ALLOWED or ext in ALLOWED):
             items.append({"name": os.path.basename(p), "path": p})
     return items
 
 def walk(x):
-    if isinstance(x, dict):
-        y = {k: walk(v) for k,v in x.items()}
-        # 1) APIキー系は除去（環境変数→Global Variable で供給）
-        for key in list(y.keys()):
-            if key.lower() in {"api_key","cohere_api_key","openai_api_key","huggingfacehub_api_token"}:
-                y.pop(key, None)
-        # 2) パス系キーを実在パスへ解決（サブフォルダ維持）
-        src_val=None
-        for key in list(y.keys()):
-            if key.lower() in {"file_paths","paths","file_path","path"}:
-                y[key] = rewrite_paths(y[key])
-                src_val = y[key]
-        # 3) UI用 'files' が未設定/空なら補完（name+path）
-        fk = next((k for k in y.keys() if k.lower()=="files"), None)
+    if isinstance(x,dict):
+        y={k:walk(v) for k,v in x.items()}
+        # APIキー項目は削除（環境変数で供給）
+        for k in list(y.keys()):
+            if k.lower() in {"api_key","cohere_api_key","openai_api_key","huggingfacehub_api_token"}:
+                y.pop(k,None)
+        # パス系キーを実在フルパスへ
+        src=None
+        for k in list(y.keys()):
+            if k.lower() in {"file_paths","paths","file_path","path"}:
+                y[k]=rewrite_paths(y[k]); src=y[k]
+        # UI用 files を補完
+        fk=next((k for k in y if k.lower()=="files"), None)
+        gen=make_files_list(src)
         if fk is None:
-            files = make_files_list(src_val)
-            if files: y["files"] = files
+            if gen: y["files"]=gen
         elif not y.get(fk):
-            files = make_files_list(src_val)
-            if files: y[fk] = files
+            if gen: y[fk]=gen
         return y
-    if isinstance(x, list):
+    if isinstance(x,list):
         return [walk(i) for i in x]
     return x
 
 found=False
-# flows/ はリポジトリ直下 or langflow-space/ 配下の両方に対応
 cands=[os.path.join(os.path.dirname(__file__),"flows"),
        os.path.join(os.path.dirname(os.path.dirname(__file__)),"flows")]
 for base in cands:
-    for src in glob.glob(os.path.join(base, "*.json")):
+    for src in glob.glob(os.path.join(base,"*.json")):
         found=True
-        with open(src, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data = walk(data)
-        dst = os.path.join(OUT, pathlib.Path(src).name)
-        with open(dst, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
+        with open(src,"r",encoding="utf-8") as f: data=json.load(f)
+        data=walk(data)
+        dst=os.path.join(OUT, pathlib.Path(src).name)
+        with open(dst,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False,indent=2)
 print("Patched flows ready (subfolders kept)." if found else "No flow JSON found.")
 PY
+
+# ===== ここからが重要：Langflow を必ず起動し、前面プロセスを維持 =====
+
+# 1) Langflow 起動（バックグラウンド）
+langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" &
+LF_PID=$!
+
+# 2) ヘルスチェック（APIが立ち上がるまで待つ）
+echo "[boot] waiting for Langflow to be healthy on :$PORT_INTERNAL ..."
+for i in $(seq 1 60); do
+  if curl -fsS "http://127.0.0.1:${PORT_INTERNAL}/api/v1/health" >/dev/null 2>&1; then
+    echo "[boot] healthy."
+    break
+  fi
+  sleep 2
+  if [ "$i" -eq 60 ]; then
+    echo "[boot] Langflow health check timed out" >&2
+    kill $LF_PID || true
+    exit 1
+  fi
+done
+
+# 3) フローを REST API でインポート
+API_URL="http://127.0.0.1:${PORT_INTERNAL}/api/v1/flows/"
+AUTH_HDR=()
+if [ -n "${LANGFLOW_APPLICATION_TOKEN:-}" ]; then
+  AUTH_HDR=(-H "x-api-key: ${LANGFLOW_APPLICATION_TOKEN}")
+  echo "[auth] Using x-api-key (masked): ${LANGFLOW_APPLICATION_TOKEN:0:6}***"
+fi
+
+shopt -s nullglob
+IMPORTED=0
+for f in /data/flows/_patched/*.json; do
+  echo "[import] $f"
+  HTTP_CODE=$(curl -sS -o /tmp/lf_import_out.txt -w "%{http_code}" \
+    -X POST "$API_URL" "${AUTH_HDR[@]}" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$f" || true)
+  if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+    echo "[import] SUCCESS ($HTTP_CODE)"
+    IMPORTED=$((IMPORTED+1))
+  else
+    echo "[import] ERROR ($HTTP_CODE)"
+    cat /tmp/lf_import_out.txt || true
+  fi
+done
+echo "[import] total imported: $IMPORTED"
+
+# 4) フォアグラウンド維持（これが無いと Space が「未初期化」で落ちます）
+wait $LF_PID
