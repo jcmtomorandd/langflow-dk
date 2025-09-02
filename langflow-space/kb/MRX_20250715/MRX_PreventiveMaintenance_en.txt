@@ -1,0 +1,99 @@
+Clearing a Banknote Jam
+Deposit Unit Banknote Jam
+To clear a Banknote Jam within the Deposit Unit, perform the following steps:
+1. Pull the Handle of the Deposit Unit to open the Unit.
+2. Remove the jammed Banknote.
+
+Centering Unit Banknote Jam
+To clear a Banknote Jam within the Centering Unit, perform the following steps:
+1. Pull the Handle of the Centering Unit to open the Unit.
+2. Remove the jammed Banknote.
+
+Transport Validation Unit Banknote Jam
+To clear a Banknote Jam within the Transport
+Validation Unit, perform the following steps:
+1. Press the TRV Guide Latches located on both sides of the Transport Validation Unit to open the Unit.
+2. Remove the jammed Banknote (if any).
+3. If the Banknote is jammed between the Lower Rollers, rotate the Handle in the dispense direction.
+4. Remove the jammed Banknote.
+
+Validation Unit Banknote Jam
+To clear a Banknote Jam within the Validation Unit, perform the following steps:
+1. Pull the VAL Latch Handle of the Validation Unit to open the Unit.
+2. Remove the jammed Banknote.
+
+Escrow Unit Banknote Jam
+To clear a Banknote Jam within the Escrow Unit perform the following steps:
+1. Remove electrical power from the MRX Unit.
+2. Unlock the ESC Assembly Unit Lock using the key provided K7450.
+3. Pull the Escrow Unit out of the Frame.
+Avoid touching and/or injecting any foreign objects or liquids into the Drum and Tape at the bottom of the Escrow Unit!
+4. Press the Latches to open the Dispensing/Reject Unit.
+5. Remove the jammed Banknote (if any).
+6. When the Banknote is jammed between the Rollers, rotate the Handle in the Dispense direction indicated by the blue arrow.
+7. Remove the jammed Banknote.
+8. When the jammed Banknote is not visible, press the Latches to open the Escrow Unit.
+9. Remove the jammed Banknote.
+10. When the Banknote is jammed in the Drum at the bottom of the Escrow Unit, rotate the Drum Handle in the Dispense direction.
+11. Remove the jammed Banknote.
+12. If the jammed Banknote still cannot be cleared, take out Banknotes directly from the bottom of the Escrow Unit.
+After clearing the Banknote jam, rotate the Drum Handle in the stack direction to take up slack in the Tape, as necessary.
+
+TRA Transport Unit Banknote Jam
+To clear a Banknote Jam within the TRA Transport Unit, perform the following steps:
+1. Pull the Handle of the desired TRA Transport Unit to open the Unit.
+2. Remove the jammed Banknote.
+
+Retracted Banknote Box Banknote Jam
+To clear a Banknote Jam within the Retracted
+Banknote Box, perform the following steps:
+1. Remove electrical power from the MRX Unit.
+2. Unlock the Retracted Banknote Box Lock using the key provided K7450 (or TA6450 for OEM BU Model).
+3. Pull the Retracted Banknote Box out of the Frame.
+4. Open the Retracted Banknote Box.
+5. Remove the jammed Banknote (if any).
+6. When the Banknote is jammed between the Rollers, pull the Banknote in the Pull-out direction.
+
+
+Recycler Unit Banknote Jam
+To clear a Banknote Jam within the Recycler Unit, perform the following steps:
+1. Remove electrical power from the MRX Unit.
+2. Unlock the Unit Lock where a desired Recycler Unit is located using the key provided K7450 (or K6510 for OEM BU Model).
+3. Pull the Unit out of the Frame.
+Avoid touching and/or injecting any foreign objects or liquids into the Drums and Tapes at the back of the Recycler Unit!
+4. Press the Latches located on both sides of the Recycler Unit to open the Unit.
+5. Remove the jammed Banknote (if any).
+6. When the Banknote is jammed in the Drum at the bottom of the Recycler Unit, remove the jammed Banknote as follows:
+For Security Drum Handle, pull the jammed Banknote in the direction.
+For Standard Drum Handle, rotate each Drum Handle in the Dispense direction.
+7. If the jammed Banknote still cannot be cleared, take out the Banknotes directly from the bottom of the Recycler Unit.
+After clearing the Banknote jam, rotate the Drum Handles in the stack direction indicated by the arrow to take up slack in the Tape, as necessary (Standard Drum Handle only).
+
+Loader Unit Banknote Jam
+To clear a Banknote Jam within the Loader Unit, perform the following steps:
+1. Remove electrical power from the MRX Unit.
+2. Unlock the Unit Lock where the desired Loader Unit is located using the key provided K7450, then pull the Unit out of the Frame.
+3. Unlock the Loader Unit using the key provided TA6450.
+4. Open the LDR Box Case in the direction indicated by the arrow.
+5. Remove the jammed Banknote.
+6. When the jammed Banknote is not visible, press the LDR TR Guide Latches to open the LDR TR Upper Guide Assy.
+7. Remove the jammed Banknote.
+
+Cleaning Procedures
+CAUTION: To keep the MRX Unit's performance optimal, perform routine cleaning and maintenance:
+• Whenever the Validation Unit or Sensors are dirty due to dust, foreign objects or similar debris adhering to it;
+• Whenever the Banknote acceptance rate degrades or an error occurs frequently; and/or
+• At least once a month or every 30,000 inserted or dispensed Banknotes.
+CAUTION: The TITO Ticket's shiny surface may impact on the picking rate of the BNF Unit. 
+Clean the Pick and Feed Rollers every 15,000 inserted Tickets to keep the BNF Deposit Unit performance optimal.
+
+Sensor and Roller Cleaning Procedure
+To clean the Sensors, Rollers and Belts, proceed as follows:
+1. Remove electrical power from the MRX Unit.
+2. Open each Assembly Unit within the MRX Unit.
+3. Clean the appropriate Transport Path and Lens of each Sensor.
+4. Apply Power to the MRX Unit to initialize the MRX Unit.
+WARNING: Be sure to use non-flammable compressed air only.
+WARNING: DO NOT let liquids or fluids drip into the Unit's interior; otherwise, the Unit may not operate correctly.
+CAUTION: Do not use alcohol, thinner, solvents or citrus based products for cleaning any Banknote Transport Sensors or surfaces. 
+The lenses can become clouded by chemical evaporation residue that may cause acceptance errors.
