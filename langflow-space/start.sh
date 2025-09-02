@@ -66,8 +66,8 @@ def force_file_node_bind(obj):
     """
     Fileノードを検出して /data/kb/** を参照させる。
     - 空文字や None は除外
-    - 既存参照→basename解決→存在しないものは捨てる
-    - 何も残らなければ kb_files の先頭数件で埋める
+    - 既存参照→basename解決→実在のみ残す
+    - 何も無ければ kb_files の先頭数件で埋める
     - UI 用 'files' も [{name,path}] で生成
     """
     if isinstance(obj, dict):
@@ -108,7 +108,7 @@ def force_file_node_bind(obj):
                 for m in mapped:
                     if m not in seen:
                         seen.add(m); umap.append(m)
-                # path/paths に反映（空は書かない）
+                # path/paths に反映
                 if "paths" in lower:
                     obj[lower["paths"]] = umap
                 elif "file_paths" in lower:
@@ -152,6 +152,36 @@ for base in cands:
         dst=os.path.join(OUT, pathlib.Path(src).name)
         with open(dst,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False,indent=2)
 print("Patched flows ready (force File->/data/kb, empty refs removed)." if found else "No flow JSON found.")
+PY
+
+# ---- 追加補正: ハンドルの baseClasses 欠落を自動補完（_types を流用）----
+python3 - <<'PY'
+import json, glob, os
+
+def fix_handles(x):
+    if isinstance(x, dict):
+        # _types があり baseClasses が無い場合はコピーして埋める
+        if "_types" in x and "baseClasses" not in x and isinstance(x["_types"], list):
+            x["baseClasses"] = list(x["_types"])
+        # dataType が Embeddings 系で baseClasses 無しなら ["Embeddings"] を強制
+        if "dataType" in x and "baseClasses" not in x:
+            dt = str(x["dataType"]).lower()
+            if "embedding" in dt:
+                x["baseClasses"] = ["Embeddings"]
+        for k,v in list(x.items()):
+            x[k] = fix_handles(v)
+        return x
+    if isinstance(x, list):
+        return [fix_handles(i) for i in x]
+    return x
+
+for jf in glob.glob("/data/flows/_patched/*.json"):
+    with open(jf, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    d = fix_handles(d)
+    with open(jf, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+print("Patched flows: baseClasses added where missing.")
 PY
 
 # ---- verify: 補正済みJSONをスキャンして実体確認（空は無視）----
