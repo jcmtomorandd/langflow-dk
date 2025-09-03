@@ -1,125 +1,84 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# ===== ディレクトリ準備 =====
-export XDG_CACHE_HOME=/data/.cache
-mkdir -p /data/flows /data/logs /data/.cache
+# ===== Settings =====
+export PORT_INTERNAL=7870
+export LANGFLOW_HOST="0.0.0.0"
+export LANGFLOW_ENABLE_SUPERUSER_CLI=True
 
-# ===== Langflow を内部ポートで無認証起動 =====
-export PORT_INTERNAL="${PORT_INTERNAL:-7870}"
-export LANGFLOW_DISABLE_AUTH="${LANGFLOW_DISABLE_AUTH:-true}"
-langflow run --host 0.0.0.0 --port "${PORT_INTERNAL}" --no-auth &
+# Superuser（管理用）
+export LANGFLOW_SUPERUSER="admin"
+export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"
 
-# ===== APIリレー（外部公開用）を書き出し =====
-cat > relay.py <<'PY'
-from fastapi import FastAPI, Request
-from fastapi.responses import Response, JSONResponse
-import httpx, os
+# HF が期待する公開ポート
+export PORT="${PORT:-7860}"   # HF側が使う env（触らない）
+# Langflow は 7870 で起動し、HF の 7860 へは自前で何もバインドしない
 
-app = FastAPI()
-BASE = f"http://127.0.0.1:{os.environ.get('PORT_INTERNAL','7870')}"
-API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_API_KEY") or ""
+# ===== Start Langflow (backend-only) =====
+# 明示ポート指定（既定7860を避け、7870で待受）
+langflow run --backend-only --host "${LANGFLOW_HOST}" --port "${PORT_INTERNAL}" &
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# ===== Wait for health =====
+echo "== waiting for Langflow health on :${PORT_INTERNAL} =="
+for i in {1..60}; do
+  if curl -fsS "http://127.0.0.1:${PORT_INTERNAL}/health" >/dev/null; then
+    echo "health OK"; break
+  fi
+  sleep 1
+done
 
-@app.api_route("/{path:path}", methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
-async def proxy(path: str, request: Request):
-    url = f"{BASE}/{path}"
-    headers = dict(request.headers)
-    # 内部LangflowへのAPIキー付与（無認証でも害なし）
-    if API_KEY and "x-api-key" not in headers:
-        headers["x-api-key"] = API_KEY
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            resp = await client.request(
-                request.method,
-                url,
-                headers=headers,
-                content=await request.body(),
-                params=dict(request.query_params)
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type")
-            )
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=502)
-PY
+# ===== Ensure superuser (idempotent) =====
+# 既に存在しても失敗しない想定で実行
+langflow superuser --username "${LANGFLOW_SUPERUSER}" --password "${LANGFLOW_SUPERUSER_PASSWORD}" || true
 
-# ===== フローJSONを自動インポート =====
-python3 - <<'PY'
-import os, time, glob, json, requests
+# ===== Create API Key via CLI =====
+# 出力から sk-... を抽出
+API_KEY_RAW="$(langflow api-key || true)"
+LANGFLOW_API_KEY="$(printf '%s\n' "$API_KEY_RAW" | grep -oE 'sk-[A-Za-z0-9._-]+' | head -n1)"
 
-BASE = f"http://127.0.0.1:{os.environ.get('PORT_INTERNAL','7870')}"
-KEY  = os.environ.get('API_KEY') or os.environ.get('HF_API_KEY') or ""
-HEAD = {"accept":"application/json"}
-if KEY:
-    HEAD["x-api-key"] = KEY
+if [ -z "${LANGFLOW_API_KEY:-}" ]; then
+  echo "ERROR: API key creation failed"; exit 1
+fi
+echo "API key created."
 
-# Langflow 起動待ち
-for _ in range(90):
+# ===== Auto-import flow JSON =====
+FLOW_JSON_PATH="flows/TestBot_GitHub.json"
+if [ ! -f "$FLOW_JSON_PATH" ]; then
+  echo "ERROR: ${FLOW_JSON_PATH} not found"; exit 1
+fi
+
+# POST /api/v1/flows/ （JSONボディ）— 要 x-api-key
+CREATE_RESP="$(curl -fsS -X POST \
+  "http://127.0.0.1:${PORT_INTERNAL}/api/v1/flows/" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: ${LANGFLOW_API_KEY}" \
+  --data-binary @"${FLOW_JSON_PATH}")"
+
+FLOW_ID="$(printf '%s\n' "$CREATE_RESP" | grep -oE '"id"\s*:\s*"[^"]+"' | head -n1 | cut -d':' -f2 | tr -d ' "')" || true
+
+if [ -z "${FLOW_ID:-}" ]; then
+  echo "ERROR: flow import failed"
+  echo "$CREATE_RESP"
+  exit 1
+fi
+
+echo "== Auto-import OK: flow id=${FLOW_ID} =="
+
+# ===== Friendly logs =====
+echo "LANGFLOW_API_KEY=${LANGFLOW_API_KEY}"
+echo "FLOW_ID=${FLOW_ID}"
+echo "BASE=https://jcmtomorandd-langflow-dk.hf.space"
+
+# ===== Keep container foreground =====
+# Langflowはすでにバックグラウンドで起動済み。前面でポート7860のダミー健康チェックを流すだけ。
+python - <<'PY'
+import time, http.client
+while True:
     try:
-        r = requests.get(f"{BASE}/api/v1/health", timeout=3)
-        if r.ok:
-            print("[auto-import] Langflow internal is up", flush=True)
-            break
+        conn = http.client.HTTPConnection("127.0.0.1", 7870, timeout=2)
+        conn.request("GET", "/health")
+        conn.getresponse().read()
     except Exception:
         pass
-    time.sleep(1)
-
-# 候補パス：/data と リポジトリ直下の flows
-patterns = [
-    "/data/flows/_patched/*.json",
-    "/data/flows/*.json",
-    "./flows/_patched/*.json",
-    "./flows/*.json",
-]
-files = []
-for p in patterns:
-    files.extend(glob.glob(p))
-files = sorted(set(files))
-
-if not files:
-    print("[auto-import] no flow JSON found under /data/flows or ./flows", flush=True)
-else:
-    for jf in files:
-        try:
-            with open(jf, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"[auto-import] skip {jf}: {e}", flush=True)
-            continue
-        try:
-            # 作成API: POST /api/v1/flows/  （複数形＋末尾スラッシュ）
-            cr = requests.post(
-                f"{BASE}/api/v1/flows/",
-                headers={**HEAD, "Content-Type":"application/json"},
-                data=json.dumps(data),
-                timeout=60
-            )
-            if cr.ok:
-                try:
-                    js = cr.json()
-                except Exception:
-                    js = {}
-                fid = js.get("id") or js.get("flow_id")
-                print(f"[auto-import] created flow id={fid} from {os.path.basename(jf)}", flush=True)
-            else:
-                print(f"[auto-import] failed: {cr.status_code} {cr.headers.get('content-type')} {cr.text[:400]}", flush=True)
-        except Exception as e:
-            print(f"[auto-import] exception: {e}", flush=True)
-
-# 一覧をログ出力（Render の FLOW_ID 設定用）
-try:
-    lr = requests.get(f"{BASE}/api/v1/flows/", headers=HEAD, timeout=10)
-    print("[flows] list status:", lr.status_code, flush=True)
-    print("[flows] body:", lr.text[:800], flush=True)
-except Exception as e:
-    print(f"[flows] list error: {e}", flush=True)
+    time.sleep(5)
 PY
-
-# ===== 外部公開: uvicorn でリレー起動（PORT未設定なら7860） =====
-exec uvicorn relay:app --host 0.0.0.0 --port "${PORT:-7860}"
