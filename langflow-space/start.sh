@@ -223,8 +223,8 @@ for jf in glob.glob("/data/flows/_patched/*.json"):
 print(f"[verify] summary: OK={ok}, NG={ng}")
 PY
 
-# ---- Langflow run ----
-langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" &
+# ---- Langflow run (API mode) ----
+langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" --api &
 LF_PID=$!
 
 echo "[boot] waiting for Langflow to be healthy on :$PORT_INTERNAL ..."
