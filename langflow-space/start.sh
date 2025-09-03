@@ -10,8 +10,8 @@ export LANGFLOW_REMOVE_API_KEYS=true
 
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 ; pwd -P)"
-PORT_EXTERNAL="${PORT:-7860}"   # HF が公開するポート
-PORT_INTERNAL="7870"            # Langflow を内部で待ち受けるポート
+PORT_EXTERNAL="${PORT:-7860}"   # HF 公開ポート
+PORT_INTERNAL="7870"            # Langflow 内部待受
 
 # ---- dirs ----
 export XDG_CACHE_HOME=/data/.cache
@@ -32,7 +32,7 @@ find /data/kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 echo "[kb] list(/kb):"
 find /kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 
-# ---- patch flows (Fileノード -> /data/kb) ----
+# ---- patch flows (File -> /data/kb) ----
 python3 - <<'PY'
 import json, os, glob, pathlib
 KB="/data/kb"; OUT="/data/flows/_patched"; os.makedirs(OUT, exist_ok=True)
@@ -48,10 +48,10 @@ for p in kb_files:
     kb_index.setdefault(os.path.basename(p).lower(), []).append(p)
 def resolve_by_basename(s: str):
     if not isinstance(s,str): return None
-    s=s.strip(); 
+    s=s.strip()
     if not s: return None
     s=s.replace("\\","/")
-    if s.startswith(KB+"/"): 
+    if s.startswith(KB+"/"):
         return s if os.path.exists(s) else None
     base=os.path.basename(s)
     cand=kb_index.get(base.lower())
@@ -111,7 +111,7 @@ PY
 
 # ---- baseClasses 補正 ----
 python3 - <<'PY'
-import json, glob, os
+import json, glob
 DT_DEFAULTS={"splittext":["TextSplitter"],"textsplitter":["TextSplitter"],"file":["Document"],"document":["Document"],"faiss":["VectorStore"],"vectorstore":["VectorStore"],"embed":["Embeddings"],"cohereembeddings":["Embeddings"],"openaiembeddings":["Embeddings"]}
 def fill_baseclasses_in_obj(d):
     if isinstance(d, dict):
@@ -128,7 +128,7 @@ def fill_baseclasses_in_obj(d):
     if isinstance(d, list): return [fill_baseclasses_in_obj(x) for x in d]
     return d
 def patch_edge_handles(obj):
-    edges=obj.get("edges"); 
+    edges=obj.get("edges")
     if not isinstance(edges, list): return obj
     for e in edges:
         data=e.get("data") or {}
@@ -145,9 +145,10 @@ def patch_edge_handles(obj):
                             if k in dt: h["baseClasses"]=list(v); break
     return obj
 for jf in glob.glob("/data/flows/_patched/*.json"):
-    with open(jf,"r",encoding="utf-8") as f: obj=json.load(f)
+    import json as _j
+    with open(jf,"r",encoding="utf-8") as f: obj=_j.load(f)
     obj=fill_baseclasses_in_obj(obj); obj=patch_edge_handles(obj)
-    with open(jf,"w",encoding="utf-8") as f: json.dump(obj,f,ensure_ascii=False,indent=2)
+    with open(jf,"w",encoding="utf-8") as f: _j.dump(obj,f,ensure_ascii=False,indent=2)
 print("Patched flows: baseClasses normalized (nodes & edges).")
 PY
 
@@ -186,34 +187,27 @@ PY
 langflow run --host 127.0.0.1 --port "$PORT_INTERNAL" &
 LF_PID=$!
 
-# ---- relay app (FastAPI) on $PORT_EXTERNAL ----
+# ---- relay: create file then run via uvicorn ----
 cat >/tmp/relay.py <<'PY'
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 import httpx, os
 
 app = FastAPI()
 INTERNAL = f"http://127.0.0.1:{os.environ.get('PORT_INTERNAL','7870')}"
 
-# health
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok"}
 
-# generic relay for /api/v1/*  (all methods)
 @app.api_route("/api/v1/{path:path}", methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS"])
 async def relay(path: str, request: Request):
-    method = request.method
     url = f"{INTERNAL}/api/v1/{path}"
-    # forward headers (keep auths)
-    headers = {k:v for k,v in request.headers.items() if k.lower() in {
-        "authorization", "x-api-key", "content-type", "accept"
-    }}
+    headers = {k:v for k,v in request.headers.items() if k.lower() in {"authorization","x-api-key","content-type","accept"}}
     content = await request.body()
     timeout = httpx.Timeout(60.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.request(method, url, headers=headers, content=content)
-    # pass-through status and body
+        r = await client.request(request.method, url, headers=headers, content=content)
     return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type","application/json"))
 
 @app.get("/")
@@ -221,13 +215,8 @@ def root():
     return PlainTextResponse("Relay OK. Use /api/v1/...", status_code=200)
 PY
 
-python - <<'PY'
-import os, uvicorn
-port = int(os.environ.get("PORT", "7860"))
-os.environ.setdefault("PORT_INTERNAL","7870")
-uvicorn.run("relay:app", host="0.0.0.0", port=port, reload=False, access_log=False)
-PY &
+python -m uvicorn relay:app --host 0.0.0.0 --port "$PORT_EXTERNAL" --app-dir /tmp &
 RELAY_PID=$!
 
-# ---- wait for child ----
+# ---- wait for both ----
 wait $LF_PID $RELAY_PID
