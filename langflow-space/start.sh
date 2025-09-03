@@ -30,7 +30,7 @@ else:
     for jf in flows:
         with open(jf,"r",encoding="utf-8") as f: data=json.load(f)
         try:
-            cr = requests.post(f"{BASE}/api/v1/flows",
+            cr = requests.post(f"{BASE}/api/v1/flow/",
                                headers={**HEAD, "Content-Type":"application/json"},
                                data=json.dumps(data), timeout=30)
             if cr.ok:
