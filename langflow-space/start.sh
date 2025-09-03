@@ -79,7 +79,6 @@ def force_file_node_bind(obj):
                 if rp and os.path.exists(rp): mapped.append(rp)
             if not mapped and kb_files: mapped=kb_files[:5]
             if mapped:
-                # dedup
                 seen=set(); umap=[]
                 for m in mapped:
                     if m not in seen: seen.add(m); umap.append(m)
@@ -94,7 +93,6 @@ def force_file_node_bind(obj):
             else:
                 for key in ["file_paths","paths","file_path","path","files"]:
                     if key in lower: obj.pop(lower[key], None)
-        # APIキー類の直書きを除去
         for k in list(obj.keys()):
             if k.lower() in {"api_key","cohere_api_key","openai_api_key","huggingfacehub_api_token"}:
                 obj.pop(k, None)
@@ -151,7 +149,6 @@ def fill_baseclasses_in_obj(d):
     return d
 
 def patch_edge_handles(obj):
-    # edges[].data.sourceHandle / targetHandle に baseClasses を付与
     edges = obj.get("edges")
     if not isinstance(edges, list): return obj
     for e in edges:
@@ -161,11 +158,9 @@ def patch_edge_handles(obj):
             if isinstance(h, dict):
                 bc = h.get("baseClasses")
                 if not isinstance(bc, list) or not bc:
-                    # 1) output_types があればそれをそのまま使う（最優先）
                     if isinstance(h.get("output_types"), list) and h["output_types"]:
                         h["baseClasses"] = list(h["output_types"])
                     else:
-                        # 2) dataType から推定
                         dt = str(h.get("dataType","")).lower()
                         for k,v in DT_DEFAULTS.items():
                             if k in dt:
@@ -223,8 +218,8 @@ for jf in glob.glob("/data/flows/_patched/*.json"):
 print(f"[verify] summary: OK={ok}, NG={ng}")
 PY
 
-# ---- Langflow run (API mode) ----
-langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" --api &
+# ---- Langflow run (standard; no --api) ----
+langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" &
 LF_PID=$!
 
 echo "[boot] waiting for Langflow to be healthy on :$PORT_INTERNAL ..."
