@@ -3,14 +3,15 @@ set -euo pipefail
 
 echo "===== Application Startup at $(date) ====="
 
-# ---- Env（既存だけ使用）----
+# ---- Env ----
 export LANGFLOW_STORE_ENVIRONMENT_VARIABLES=true
 export LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=COHERE_API_KEY
 export LANGFLOW_REMOVE_API_KEYS=true
 
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 ; pwd -P)"
-PORT_INTERNAL="${PORT:-7860}"
+PORT_EXTERNAL="${PORT:-7860}"   # HF が公開するポート
+PORT_INTERNAL="7870"            # Langflow を内部で待ち受けるポート
 
 # ---- dirs ----
 export XDG_CACHE_HOME=/data/.cache
@@ -31,13 +32,11 @@ find /data/kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 echo "[kb] list(/kb):"
 find /kb -maxdepth 3 -type f -printf " - %p\n" 2>/dev/null || true
 
-# ---- patch flows: Fileノードの実ファイルへ強制バインド（空参照除去）----
+# ---- patch flows (Fileノード -> /data/kb) ----
 python3 - <<'PY'
 import json, os, glob, pathlib
-
 KB="/data/kb"; OUT="/data/flows/_patched"; os.makedirs(OUT, exist_ok=True)
 ALLOWED={".pdf",".txt",".md",".csv",".docx",".json",".yaml",".yml",".xlsx"}
-
 kb_files=[]
 for r,_,fs in os.walk(KB):
     for fn in fs:
@@ -47,10 +46,9 @@ for r,_,fs in os.walk(KB):
 kb_index={}
 for p in kb_files:
     kb_index.setdefault(os.path.basename(p).lower(), []).append(p)
-
 def resolve_by_basename(s: str):
     if not isinstance(s,str): return None
-    s=s.strip()
+    s=s.strip(); 
     if not s: return None
     s=s.replace("\\","/")
     if s.startswith(KB+"/"): 
@@ -58,7 +56,6 @@ def resolve_by_basename(s: str):
     base=os.path.basename(s)
     cand=kb_index.get(base.lower())
     return cand[0] if cand and os.path.exists(cand[0]) else None
-
 def force_file_node_bind(obj):
     if isinstance(obj, dict):
         for k,v in list(obj.items()):
@@ -100,7 +97,6 @@ def force_file_node_bind(obj):
     if isinstance(obj, list):
         return [force_file_node_bind(i) for i in obj]
     return obj
-
 found=False
 for base in [os.path.join(os.path.dirname(__file__),"flows"),
              os.path.join(os.path.dirname(os.path.dirname(__file__)),"flows")]:
@@ -113,68 +109,45 @@ for base in [os.path.join(os.path.dirname(__file__),"flows"),
 print("Patched flows ready (force File->/data/kb, empty refs removed)." if found else "No flow JSON found.")
 PY
 
-# ---- 追加補正: baseClasses をノード/エッジの両方で補完 ----
+# ---- baseClasses 補正 ----
 python3 - <<'PY'
 import json, glob, os
-
-DT_DEFAULTS = {
-    "cohereembeddings": ["Embeddings"],
-    "openaiembeddings": ["Embeddings"],
-    "embed": ["Embeddings"],
-    "splittext": ["TextSplitter"],
-    "textsplitter": ["TextSplitter"],
-    "file": ["Document"],
-    "document": ["Document"],
-    "vectorstore": ["VectorStore"],
-    "faiss": ["VectorStore"],
-}
-
+DT_DEFAULTS={"splittext":["TextSplitter"],"textsplitter":["TextSplitter"],"file":["Document"],"document":["Document"],"faiss":["VectorStore"],"vectorstore":["VectorStore"],"embed":["Embeddings"],"cohereembeddings":["Embeddings"],"openaiembeddings":["Embeddings"]}
 def fill_baseclasses_in_obj(d):
     if isinstance(d, dict):
-        need = ("baseClasses" not in d) or (not d.get("baseClasses")) or (not isinstance(d.get("baseClasses"), list))
+        need=("baseClasses" not in d) or (not d.get("baseClasses")) or (not isinstance(d.get("baseClasses"), list))
         if need:
             if isinstance(d.get("_types"), list) and d["_types"]:
-                d["baseClasses"] = list(d["_types"])
+                d["baseClasses"]=list(d["_types"])
             else:
-                dt = str(d.get("dataType","")).lower()
-                for key, val in DT_DEFAULTS.items():
-                    if key in dt:
-                        d["baseClasses"] = list(val)
-                        break
-        for k,v in list(d.items()):
-            d[k] = fill_baseclasses_in_obj(v)
+                dt=str(d.get("dataType","")).lower()
+                for k,v in DT_DEFAULTS.items():
+                    if k in dt: d["baseClasses"]=list(v); break
+        for k,v in list(d.items()): d[k]=fill_baseclasses_in_obj(v)
         return d
-    if isinstance(d, list):
-        return [fill_baseclasses_in_obj(x) for x in d]
+    if isinstance(d, list): return [fill_baseclasses_in_obj(x) for x in d]
     return d
-
 def patch_edge_handles(obj):
-    edges = obj.get("edges")
+    edges=obj.get("edges"); 
     if not isinstance(edges, list): return obj
     for e in edges:
-        data = e.get("data") or {}
+        data=e.get("data") or {}
         for key in ("sourceHandle","targetHandle"):
-            h = data.get(key)
+            h=data.get(key)
             if isinstance(h, dict):
-                bc = h.get("baseClasses")
+                bc=h.get("baseClasses")
                 if not isinstance(bc, list) or not bc:
                     if isinstance(h.get("output_types"), list) and h["output_types"]:
-                        h["baseClasses"] = list(h["output_types"])
+                        h["baseClasses"]=list(h["output_types"])
                     else:
-                        dt = str(h.get("dataType","")).lower()
+                        dt=str(h.get("dataType","")).lower()
                         for k,v in DT_DEFAULTS.items():
-                            if k in dt:
-                                h["baseClasses"] = list(v)
-                                break
+                            if k in dt: h["baseClasses"]=list(v); break
     return obj
-
 for jf in glob.glob("/data/flows/_patched/*.json"):
-    with open(jf,"r",encoding="utf-8") as f:
-        obj=json.load(f)
-    obj = fill_baseclasses_in_obj(obj)
-    obj = patch_edge_handles(obj)
-    with open(jf,"w",encoding="utf-8") as f:
-        json.dump(obj,f,ensure_ascii=False,indent=2)
+    with open(jf,"r",encoding="utf-8") as f: obj=json.load(f)
+    obj=fill_baseclasses_in_obj(obj); obj=patch_edge_handles(obj)
+    with open(jf,"w",encoding="utf-8") as f: json.dump(obj,f,ensure_ascii=False,indent=2)
 print("Patched flows: baseClasses normalized (nodes & edges).")
 PY
 
@@ -182,7 +155,6 @@ PY
 python3 - <<'PY'
 import json, glob, os
 print("[verify] scan patched flows ...")
-
 def iter_paths(o):
     if isinstance(o, dict):
         for k,v in o.items():
@@ -191,69 +163,71 @@ def iter_paths(o):
                 for it in v:
                     if isinstance(it,dict):
                         p=it.get("path")
-                        if isinstance(p,str) and p.strip():
-                            yield p.strip()
-            if kl in {"file_path","path"} and isinstance(v,str) and v.strip():
-                yield v.strip()
+                        if isinstance(p,str) and p.strip(): yield p.strip()
+            if kl in {"file_path","path"} and isinstance(v,str) and v.strip(): yield v.strip()
             elif kl in {"file_paths","paths"} and isinstance(v,list):
                 for i in v:
-                    if isinstance(i,str) and i.strip(): 
-                        yield i.strip()
-            else:
-                yield from iter_paths(v)
+                    if isinstance(i,str) and i.strip(): yield i.strip()
+            else: yield from iter_paths(v)
     elif isinstance(o,list):
-        for i in o: 
-            yield from iter_paths(i)
-
+        for i in o: yield from iter_paths(i)
 ok=ng=0
 for jf in glob.glob("/data/flows/_patched/*.json"):
     with open(jf,"r",encoding="utf-8") as f: d=json.load(f)
     paths=list(dict.fromkeys(iter_paths(d)))
     print(f"[verify] {os.path.basename(jf)} : {len(paths)} ref(s)")
     for p in paths:
-        if os.path.exists(p):
-            print(f"  [OK] {p} ({os.path.getsize(p)} bytes)"); ok+=1
-        else:
-            print(f"  [NG] {p} (not found)"); ng+=1
+        if os.path.exists(p): print(f"  [OK] {p} ({os.path.getsize(p)} bytes)"); ok+=1
+        else: print(f"  [NG] {p} (not found)"); ng+=1
 print(f"[verify] summary: OK={ok}, NG={ng}")
 PY
 
-# ---- Langflow run (standard; no --api) ----
-langflow run --host 0.0.0.0 --port "$PORT_INTERNAL" &
+# ---- Langflow (internal) ----
+langflow run --host 127.0.0.1 --port "$PORT_INTERNAL" &
 LF_PID=$!
 
-echo "[boot] waiting for Langflow to be healthy on :$PORT_INTERNAL ..."
-for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${PORT_INTERNAL}/api/v1/health" >/dev/null 2>&1; then
-    echo "[boot] healthy."; break
-  fi
-  sleep 2
-  if [ "$i" -eq 60 ]; then
-    echo "[boot] Langflow health check timed out" >&2
-    kill $LF_PID || true; exit 1
-  fi
-done
+# ---- relay app (FastAPI) on $PORT_EXTERNAL ----
+cat >/tmp/relay.py <<'PY'
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, PlainTextResponse
+import httpx, os
 
-API_URL="http://127.0.0.1:${PORT_INTERNAL}/api/v1/flows/"
-AUTH_HDR=()
-if [ -n "${LANGFLOW_APPLICATION_TOKEN:-}" ]; then
-  AUTH_HDR=(-H "x-api-key: ${LANGFLOW_APPLICATION_TOKEN}")
-  echo "[auth] Using x-api-key (masked): ${LANGFLOW_APPLICATION_TOKEN:0:6}***"
-fi
+app = FastAPI()
+INTERNAL = f"http://127.0.0.1:{os.environ.get('PORT_INTERNAL','7870')}"
 
-shopt -s nullglob
-IMPORTED=0
-for f in /data/flows/_patched/*.json; do
-  echo "[import] $f"
-  HTTP_CODE=$(curl -sS -o /tmp/lf_import_out.txt -w "%{http_code}" \
-    -X POST "$API_URL" "${AUTH_HDR[@]}" \
-    -H "Content-Type: application/json" \
-    --data-binary @"$f" || true)
-  if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-    echo "[import] SUCCESS ($HTTP_CODE)"; IMPORTED=$((IMPORTED+1))
-  else
-    echo "[import] ERROR ($HTTP_CODE)"; cat /tmp/lf_import_out.txt || true
-  fi
-done
-echo "[import] total imported: $IMPORTED"
-wait $LF_PID
+# health
+@app.get("/api/v1/health")
+async def health():
+    return {"status": "ok"}
+
+# generic relay for /api/v1/*  (all methods)
+@app.api_route("/api/v1/{path:path}", methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS"])
+async def relay(path: str, request: Request):
+    method = request.method
+    url = f"{INTERNAL}/api/v1/{path}"
+    # forward headers (keep auths)
+    headers = {k:v for k,v in request.headers.items() if k.lower() in {
+        "authorization", "x-api-key", "content-type", "accept"
+    }}
+    content = await request.body()
+    timeout = httpx.Timeout(60.0, connect=30.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.request(method, url, headers=headers, content=content)
+    # pass-through status and body
+    return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type","application/json"))
+
+@app.get("/")
+def root():
+    return PlainTextResponse("Relay OK. Use /api/v1/...", status_code=200)
+PY
+
+python - <<'PY'
+import os, uvicorn
+port = int(os.environ.get("PORT", "7860"))
+os.environ.setdefault("PORT_INTERNAL","7870")
+uvicorn.run("relay:app", host="0.0.0.0", port=port, reload=False, access_log=False)
+PY &
+RELAY_PID=$!
+
+# ---- wait for child ----
+wait $LF_PID $RELAY_PID
