@@ -1,124 +1,183 @@
 #!/usr/bin/env bash
+# start.sh — HF Spaces / Langflow backend-only, robust auto-import (STAMP v4)
 set -euo pipefail
 
-# ===== Settings =====
-export PORT_INTERNAL=7870
+# =========================
+# Config (edit as needed)
+# =========================
+export PORT_INTERNAL=7870                 # Langflow listens here
 export LANGFLOW_HOST="0.0.0.0"
 export LANGFLOW_BACKEND_ONLY=True
 export LANGFLOW_ENABLE_SUPERUSER_CLI=True
+
+# Superuser (change password!)
 export LANGFLOW_SUPERUSER="admin"
-export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"   # ←強い値に変更
+export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"
+
+# Flow JSON path in repo
 FLOW_JSON_PATH="flows/TestBot_GitHub.json"
 
-# ===== Start Langflow (backend-only) =====
+echo "===== START.SH STAMP v4 ====="
+
+# =========================
+# Boot Langflow (backend)
+# =========================
 langflow run --backend-only --host "${LANGFLOW_HOST}" --port "${PORT_INTERNAL}" &
 
-# ===== Wait for health (起動安定化) =====
+# =========================
+# Wait for health
+# =========================
 echo "== waiting for Langflow health on :${PORT_INTERNAL} =="
-for i in {1..90}; do
-  if curl -fsS "http://127.0.0.1:${PORT_INTERNAL}/health" >/dev/null; then
-    echo "health OK"; break
+HEALTH_OK=0
+for i in $(seq 1 120); do
+  if curl -fsS "http://127.0.0.1:${PORT_INTERNAL}/health" >/dev/null 2>&1; then
+    echo "health OK"; HEALTH_OK=1; break
   fi
   sleep 1
 done
-
-# 追加の安定待ち（DBマイグレーション/認証初期化対策）
+if [ "$HEALTH_OK" -ne 1 ]; then
+  echo "ERROR: health check timeout"; exit 1
+fi
+# small settle time for auth/db
 sleep 2
 
-# ===== Ensure superuser (冪等) =====
-if langflow superuser --username "${LANGFLOW_SUPERUSER}" --password "${LANGFLOW_SUPERUSER_PASSWORD}"; then
+# =========================
+# Ensure superuser (idempotent)
+# =========================
+if langflow superuser --username "${LANGFLOW_SUPERUSER}" --password "${LANGFLOW_SUPERUSER_PASSWORD}" >/dev/null 2>&1; then
   echo "Superuser created."
 else
-  echo "Superuser ensured (maybe already exists)."
+  echo "Superuser ensured."
 fi
 
-# ===== Function: robust JSON field extract (Python) =====
-json_get () {
-  python - "$1" <<'PY' || true
-import sys, json
-key = sys.argv[1]
-data = sys.stdin.read().strip()
-if not data:
-    print(""); sys.exit(0)
-try:
-    j = json.loads(data)
-    v = j.get(key,"")
-    if isinstance(v, str): print(v)
-    else: print("")
-except Exception:
-    print("")
-PY
+BASE="http://127.0.0.1:${PORT_INTERNAL}"
+
+# =========================
+# Helper: extract JSON field (pure shell)
+# =========================
+json_extract () {
+  # $1: key name
+  # reads stdin, tries to extract "key":"value"
+  local key="$1"
+  sed -n 's/.*"'"$key"'":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
 }
 
-# ===== Function: login (try /api/v1/login then /v1/login) =====
-login_and_get_token () {
-  local USER="$1" PASS="$2" BASE="http://127.0.0.1:${PORT_INTERNAL}"
-  local BODY STATUS R AWK
-
-  for EP in "/api/v1/login" "/v1/login"; do
-    echo "Trying login endpoint: ${EP}"
-    R="$(curl -sS -L -i -X POST "${BASE}${EP}" \
+# =========================
+# Login to get access_token (try endpoints with retry)
+# =========================
+ACCESS_TOKEN=""
+login_try () {
+  local EP="$1"
+  local RESP STATUS BODY
+  RESP="$(curl -sS -L -i -X POST "${BASE}${EP}" \
           -H "Content-Type: application/x-www-form-urlencoded" \
           -H "Accept: application/json" \
-          --data "grant_type=password&username=${USER}&password=${PASS}" || true)"
-    STATUS="$(printf '%s' "$R" | awk 'NR==1{print $2}')"
-    BODY="$(printf '%s' "$R" | awk 'f{print} /^$/{f=1}')"  # ヘッダとボディ分離
-    if [ "${STATUS}" = "200" ]; then
-      printf '%s' "$BODY" | json_get "access_token"
-      return 0
-    else
-      echo "[login ${EP}] HTTP ${STATUS}"
-      echo "[login ${EP}] body: $(printf '%s' "$BODY" | head -c 200)"
-    fi
-  done
-  return 1
+          --data "grant_type=password&username=${LANGFLOW_SUPERUSER}&password=${LANGFLOW_SUPERUSER_PASSWORD}" || true)"
+  STATUS="$(printf '%s' "$RESP" | awk 'NR==1{print $2}')"
+  BODY="$(printf '%s' "$RESP" | awk 'f{print} /^$/{f=1}')"
+  ACCESS_TOKEN="$(printf '%s' "$BODY" | json_extract "access_token")"
+  if [ "$STATUS" = "200" ] && [ -n "$ACCESS_TOKEN" ]; then
+    echo "Got access_token via ${EP}."
+    return 0
+  else
+    echo "[login ${EP}] HTTP ${STATUS} body: $(printf '%s' "$BODY" | head -c 200)"
+    return 1
+  fi
 }
 
-# ===== (A) Login → access_token 取得（リトライ付） =====
-ACCESS_TOKEN=""
-for t in {1..10}; do
-  ACCESS_TOKEN="$(login_and_get_token "${LANGFLOW_SUPERUSER}" "${LANGFLOW_SUPERUSER_PASSWORD}")" || true
-  if [ -n "${ACCESS_TOKEN}" ]; then
-    echo "Got access_token." ; break
+echo "== login =="
+for t in $(seq 1 12); do
+  echo "Login try ${t}/12"
+  if login_try "/api/v1/login" || login_try "/v1/login"; then
+    break
   fi
-  echo "login retry ${t}/10 ..."
   sleep 2
 done
 if [ -z "${ACCESS_TOKEN}" ]; then
   echo "ERROR: login failed after retries"; exit 1
 fi
 
-# ===== (B) API Key 作成（Bearer） =====
-API_RESP="$(curl -fsS -L -X POST "http://127.0.0.1:${PORT_INTERNAL}/api/v1/api_key/" \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -d '{"name":"hf-space-auto"}' || true)"
-LANGFLOW_API_KEY="$(printf '%s' "$API_RESP" | json_get "api_key")"
+# =========================
+# API Key — prefer env API_KEY, else create via REST
+# =========================
+LANGFLOW_API_KEY="${API_KEY:-}"
+
+create_key_try () {
+  local EP="$1"
+  local RESP KEY
+  RESP="$(curl -sS -L -X POST "${BASE}${EP}" \
+          -H "Content-Type: application/json" \
+          -H "Accept: application/json" \
+          -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+          -d '{"name":"hf-space-auto"}' || true)"
+  # support api_key / key / token
+  KEY="$(printf '%s' "$RESP" | json_extract "api_key")"
+  [ -z "$KEY" ] && KEY="$(printf '%s' "$RESP" | json_extract "key")"
+  [ -z "$KEY" ] && KEY="$(printf '%s' "$RESP" | json_extract "token")"
+  if [ -n "$KEY" ]; then
+    LANGFLOW_API_KEY="$KEY"
+    echo "API key created via ${EP}."
+    return 0
+  else
+    echo "[api_key ${EP}] resp: $(printf '%s' "$RESP" | head -c 300)"
+    return 1
+  fi
+}
+
 if [ -z "${LANGFLOW_API_KEY}" ]; then
-  # 互換キー名のフォールバック
-  LANGFLOW_API_KEY="$(printf '%s' "$API_RESP" | json_get "key")"
+  echo "== create API key =="
+  create_key_try "/api/v1/api_key/" || create_key_try "/v1/api_key/" || true
 fi
+
 if [ -z "${LANGFLOW_API_KEY}" ]; then
-  echo "ERROR: API key creation failed. resp=$(printf '%s' "$API_RESP" | head -c 300)"
+  echo "ERROR: API key creation failed."
+  echo "TIP: Issue an API key once in UI and set env 'API_KEY' to use it here."
   exit 1
 fi
-echo "API key created."
+echo "API key ready."
 
-# ===== (C) フロー自動インポート（x-api-key） =====
+# =========================
+# Flow import — JSON first, fallback to multipart; try both /api/v1 and /v1
+# =========================
 if [ ! -f "${FLOW_JSON_PATH}" ]; then
   echo "ERROR: ${FLOW_JSON_PATH} not found"; exit 1
 fi
 
-CREATE_RESP="$(curl -fsS -L -X POST "http://127.0.0.1:${PORT_INTERNAL}/api/v1/flows/" \
-  -H "accept: application/json" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${LANGFLOW_API_KEY}" \
-  --data-binary @"${FLOW_JSON_PATH}" || true)"
+extract_flow_id () {
+  sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
 
-FLOW_ID="$(printf '%s' "$CREATE_RESP" | json_get "id")"
+do_import_json () {
+  local EP="$1" RESP
+  RESP="$(curl -sS -L -X POST "${BASE}${EP}" \
+          -H "accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: ${LANGFLOW_API_KEY}" \
+          --data-binary @"${FLOW_JSON_PATH}" || true)"
+  printf '%s' "$RESP" | extract_flow_id
+}
+
+do_import_upload () {
+  local EP="$1" RESP
+  RESP="$(curl -sS -L -X POST "${BASE}${EP}" \
+          -H "x-api-key: ${LANGFLOW_API_KEY}" \
+          -F "file=@${FLOW_JSON_PATH}" || true)"
+  printf '%s' "$RESP" | extract_flow_id
+}
+
+FLOW_ID=""
+# JSON endpoints
+FLOW_ID="$(do_import_json "/api/v1/flows/")"
+[ -z "$FLOW_ID" ] && FLOW_ID="$(do_import_json "/v1/flows/")"
+# Fallback: upload
+if [ -z "$FLOW_ID" ]; then
+  echo "[flows/ JSON] failed, fallback to /flows/upload"
+  FLOW_ID="$(do_import_upload "/api/v1/flows/upload")"
+  [ -z "$FLOW_ID" ] && FLOW_ID="$(do_import_upload "/v1/flows/upload")"
+fi
+
 if [ -z "${FLOW_ID}" ]; then
-  echo "ERROR: flow import failed. resp=$(printf '%s' "$CREATE_RESP" | head -c 400)"
+  echo "ERROR: flow import failed (both JSON & upload)."
   exit 1
 fi
 
@@ -127,5 +186,7 @@ echo "LANGFLOW_API_KEY=${LANGFLOW_API_KEY}"
 echo "FLOW_ID=${FLOW_ID}"
 echo "BASE=https://jcmtomorandd-langflow-dk.hf.space"
 
-# ===== Keep container foreground =====
+# =========================
+# Keep container foreground
+# =========================
 tail -f /dev/null
