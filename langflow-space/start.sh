@@ -30,14 +30,14 @@ else:
     for jf in flows:
         with open(jf,"r",encoding="utf-8") as f: data=json.load(f)
         try:
-            cr = requests.post(f"{BASE}/api/v1/flow/",
-                               headers={**HEAD, "Content-Type":"application/json"},
+            cr = requests.post(f"{BASE}/api/v1/flows/",
+                               headers={**HEAD, "Content-Type":"application/json", "accept":"application/json"},
                                data=json.dumps(data), timeout=30)
             if cr.ok:
                 fid = cr.json().get("id") or cr.json().get("flow_id")
                 print(f"[auto-import] created flow id={fid} from {os.path.basename(jf)}")
             else:
-                print(f"[auto-import] failed: {cr.status_code} {cr.text[:200]}")
+                print(f"[auto-import] failed: {cr.status_code} {cr.headers.get('content-type')} {cr.text[:400]}")
         except Exception as e:
             print(f"[auto-import] exception: {e}")
 
