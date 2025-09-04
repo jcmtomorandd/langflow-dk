@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# start.sh — HF Spaces / Langflow backend-only, require API_KEY (hf-...)  (STAMP v5.2)
+# start.sh — HF Spaces / Langflow backend-only, require API_KEY (hf-...)  (STAMP v5.3)
 set -euo pipefail
 
 # ===== Config =====
-export PORT_INTERNAL=7870
+export PORT_INTERNAL="${PORT:-7860}"    # HFの$PORTで待受（通常7860）
 export LANGFLOW_HOST="0.0.0.0"
 export LANGFLOW_BACKEND_ONLY=True
 export LANGFLOW_ENABLE_SUPERUSER_CLI=True
@@ -14,7 +14,7 @@ export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"
 
 FLOW_JSON_PATH="flows/TestBot_GitHub.json"
 
-echo "===== START.SH STAMP v5.2 ====="
+echo "===== START.SH STAMP v5.3 ====="
 
 # ===== Boot (backend-only) =====
 langflow run --backend-only --host "${LANGFLOW_HOST}" --port "${PORT_INTERNAL}" &
@@ -33,7 +33,7 @@ langflow superuser --username "${LANGFLOW_SUPERUSER}" --password "${LANGFLOW_SUP
 
 BASE="http://127.0.0.1:${PORT_INTERNAL}"
 
-# ===== API_KEY 必須（hf- でも OK）=====
+# ===== API_KEY 必須（hf-...）=====
 if [ -z "${API_KEY:-}" ]; then
   echo "FATAL: API_KEY env not set (expect hf-... key)."
   exit 1
