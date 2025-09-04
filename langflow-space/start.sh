@@ -8,6 +8,7 @@ export LANGFLOW_BACKEND_ONLY=True
 export LANGFLOW_ENABLE_SUPERUSER_CLI=True
 export LANGFLOW_SUPERUSER="admin"
 export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"
+export LANGFLOW_API_KEY="${API_KEY}"    # ← これを追加（サーバの受け付けるキーを固定）
 
 FLOW_JSON_PATH="flows/TestBot_GitHub.json"
 
