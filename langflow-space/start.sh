@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start.sh — HF Spaces / Langflow backend-only, require API_KEY (hf-...)  (STAMP v5.3)
+# start.sh — HF Spaces / Langflow backend-only, Flow ID 固定対応版 (STAMP v6.0)
 set -euo pipefail
 
 # ===== Config =====
@@ -8,13 +8,13 @@ export LANGFLOW_HOST="0.0.0.0"
 export LANGFLOW_BACKEND_ONLY=True
 export LANGFLOW_ENABLE_SUPERUSER_CLI=True
 
-# Superuser（UI用の保険。ログインAPIは使わない）
+# Superuser（UI用の保険）
 export LANGFLOW_SUPERUSER="admin"
 export LANGFLOW_SUPERUSER_PASSWORD="change-this-strong!"
 
 FLOW_JSON_PATH="flows/TestBot_GitHub.json"
 
-echo "===== START.SH STAMP v5.3 ====="
+echo "===== START.SH STAMP v6.0 ====="
 
 # ===== Boot (backend-only) =====
 langflow run --backend-only --host "${LANGFLOW_HOST}" --port "${PORT_INTERNAL}" &
@@ -41,38 +41,46 @@ fi
 LANGFLOW_API_KEY="${API_KEY}"
 echo "API key injected."
 
-# ===== Flow import =====
-if [ ! -f "${FLOW_JSON_PATH}" ]; then
-  echo "FATAL: ${FLOW_JSON_PATH} not found."
-  exit 1
+# ===== Flow import / reuse =====
+# 環境変数 FLOW_ID が設定されている場合 → それを使う
+if [ -n "${FLOW_ID:-}" ]; then
+  echo "== Reusing existing Flow ID: ${FLOW_ID} =="
+else
+  # 初回のみインポート
+  if [ ! -f "${FLOW_JSON_PATH}" ]; then
+    echo "FATAL: ${FLOW_JSON_PATH} not found."
+    exit 1
+  fi
+
+  extract_flow_id () { sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1; }
+
+  do_import_json () {
+    curl -sS -L -X POST "${BASE}$1" \
+      -H "accept: application/json" \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: ${LANGFLOW_API_KEY}" \
+      --data-binary @"${FLOW_JSON_PATH}" | extract_flow_id
+  }
+  do_import_upload () {
+    curl -sS -L -X POST "${BASE}$1" \
+      -H "x-api-key: ${LANGFLOW_API_KEY}" \
+      -F "file=@${FLOW_JSON_PATH}" | extract_flow_id
+  }
+
+  FLOW_ID="$(do_import_json "/api/v1/flows/")"
+  [ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_json "/v1/flows/")"
+  [ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_upload "/api/v1/flows/upload")"
+  [ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_upload "/v1/flows/upload")"
+
+  if [ -z "${FLOW_ID}" ]; then
+    echo "FATAL: flow import failed."
+    exit 1
+  fi
+
+  echo "== Auto-import OK: flow id=${FLOW_ID} =="
 fi
 
-extract_flow_id () { sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1; }
-
-do_import_json () {
-  curl -sS -L -X POST "${BASE}$1" \
-    -H "accept: application/json" \
-    -H "Content-Type: application/json" \
-    -H "x-api-key: ${LANGFLOW_API_KEY}" \
-    --data-binary @"${FLOW_JSON_PATH}" | extract_flow_id
-}
-do_import_upload () {
-  curl -sS -L -X POST "${BASE}$1" \
-    -H "x-api-key: ${LANGFLOW_API_KEY}" \
-    -F "file=@${FLOW_JSON_PATH}" | extract_flow_id
-}
-
-FLOW_ID="$(do_import_json "/api/v1/flows/")"
-[ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_json "/v1/flows/")"
-[ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_upload "/api/v1/flows/upload")"
-[ -z "${FLOW_ID}" ] && FLOW_ID="$(do_import_upload "/v1/flows/upload")"
-
-if [ -z "${FLOW_ID}" ]; then
-  echo "FATAL: flow import failed."
-  exit 1
-fi
-
-echo "== Auto-import OK: flow id=${FLOW_ID} =="
+# ===== Summary =====
 echo "LANGFLOW_API_KEY=${LANGFLOW_API_KEY}"
 echo "FLOW_ID=${FLOW_ID}"
 echo "BASE=https://jcmtomorandd-langflow-dk.hf.space"
